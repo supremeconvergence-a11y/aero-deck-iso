@@ -116,8 +116,7 @@ jobs:
               "$url") || return 1
             echo "$resp" | tee /tmp/gofile-response.json
             local page
-            page=$(python3 -c 'import json,sys; d=json.load(open("/tmp/gofile-response.json"));
-print(d.get("data",{}).get("downloadPage") or d.get("data",{}).get("downloadPage") or "")')
+            page=$(python3 -c 'import json; d=json.load(open("/tmp/gofile-response.json")); print(d.get("data",{}).get("downloadPage") or "")')
             [ -n "$page" ] && [ "$page" != "None" ] || return 1
             printf '%s\n' "$page"
           }
@@ -127,15 +126,7 @@ print(d.get("data",{}).get("downloadPage") or d.get("data",{}).get("downloadPage
           if [ -z "$page" ]; then
             servers=$(curl -fsSL --retry 3 https://api.gofile.io/servers || true)
             echo "servers: $servers"
-            names=$(python3 -c 'import json,sys,os
-raw=os.environ.get("S") or open("/dev/stdin").read()
-try:
-    d=json.loads(raw)
-    arr=d.get("data",{}).get("servers") or []
-    for s in arr:
-        print(s.get("name",""))
-except Exception:
-    pass' <<<"$servers")
+            names=$(printf '%s' "$servers" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read() or "{}"); [print((s or {}).get("name","")) for s in (d.get("data",{}) or {}).get("servers") or []]')
             for s in $names; do
               [ -n "$s" ] || continue
               page=$(upload "https://${s}.gofile.io/uploadFile") || page=""
@@ -183,17 +174,7 @@ except Exception:
           split -b 1900M -d --additional-suffix=.part "$iso" "${ISO_NAME}."
           ls -lh "${ISO_NAME}".*.part "$iso.sha256" gofile.txt
           tag="iso-2026.11.23-monday-${{ github.run_number }}"
-          notes="Nuvio Aero OS ISO (aero-deck-2026.11.23-monday).
-
-          **Main download (one file, burn this):** ${GOFILE}
-
-          - File: ${ISO_NAME}
-          - Size: ${ISO_SIZE}
-          - SHA-256: ${ISO_SHA256}
-
-          Burn it with Rufus (DD mode) or balenaEtcher.
-
-          The attached .part files are a backup only. To rejoin: cat ${ISO_NAME}.*.part > ${ISO_NAME} then check the sha256."
+          notes="$(printf '%s\n'             "Nuvio Aero OS ISO (aero-deck-2026.11.23-monday)."             ""             "**Main download (one file, burn this):** ${GOFILE}"             ""             "- File: ${ISO_NAME}"             "- Size: ${ISO_SIZE}"             "- SHA-256: ${ISO_SHA256}"             ""             "Burn it with Rufus (DD mode) or balenaEtcher."             ""             "The attached .part files are a backup only. To rejoin: cat ${ISO_NAME}.*.part > ${ISO_NAME} then check the sha256.")"
           gh release create "$tag" \
             --repo "${{ github.repository }}" \
             --title "Nuvio Aero OS ISO ${{ github.run_number }}" \
