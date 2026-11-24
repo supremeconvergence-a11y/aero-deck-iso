@@ -1,0 +1,201 @@
+name: Build Nuvio Aero OS ISO
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          echo "Before cleanup:"
+          df -h
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile || true
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            /usr/share/miniconda \
+            /usr/local/graalvm \
+            /usr/local/share/powershell \
+            /opt/az \
+            /usr/lib/jvm \
+            /usr/local/lib/node_modules \
+            /usr/local/share/chromium \
+            /opt/microsoft \
+            /usr/local/share/edge_driver \
+            /usr/share/gradle \
+            /usr/share/sbt || true
+          sudo docker system prune -af || true
+          sudo apt-get clean || true
+          echo "After cleanup:"
+          df -hT
+          sudo mkdir -p /mnt/aero
+          sudo chown "$(id -u)":"$(id -g)" /mnt/aero
+
+      - name: Build ISO in archlinux container
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          # Leave headroom for the ~3.6 GB ISO (written next to work.img),
+          # Docker overlay, and the OS. Cap at 30G (script default).
+          avail_g=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
+          headroom=10
+          if [ "$avail_g" -gt $((30 + headroom)) ]; then
+            work_size=30G
+          else
+            ws=$((avail_g - headroom))
+            [ "$ws" -lt 22 ] && ws=22
+            work_size="${ws}G"
+          fi
+          echo "Available on /mnt: ${avail_g}G -> WORK_SIZE=$work_size"
+          docker pull archlinux:latest
+          docker run --rm --privileged --name aero-build \
+            --hostname aero-build \
+            -e AERO_DIR=/aero \
+            -e WORK_SIZE="$work_size" \
+            -e AERO_ISO_VERSION=2026.11.23-monday \
+            -e EXPECTED_SHA=42df269fcf7f259fda9ae8e6c4626d65cd3d404578b541e918a144adc6f042a9 \
+            -v /mnt/aero:/aero \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$GITHUB_WORKSPACE/out:/out" \
+            -v /dev:/dev \
+            archlinux:latest \
+            bash /src/ci/build-in-container.sh
+          ls -lh "$GITHUB_WORKSPACE/out"
+
+      - name: Record checksum and upload to Gofile
+        id: gofile
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          iso=$(ls -1 "$GITHUB_WORKSPACE"/out/aero-deck-*-x86_64.iso | head -1)
+          [ -n "$iso" ] && [ -f "$iso" ]
+          name=$(basename "$iso")
+          size=$(stat -c %s "$iso")
+          size_h=$(du -h "$iso" | cut -f1)
+          if [ -f "$iso.sha256" ]; then
+            sha=$(awk '{print $1}' "$iso.sha256")
+          else
+            sha=$(sha256sum "$iso" | awk '{print $1}')
+            echo "$sha  $name" > "$iso.sha256"
+          fi
+          echo "ISO_NAME=$name" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "ISO_SIZE_BYTES=$size" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "ISO_SIZE=$size_h" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "ISO_SHA256=$sha" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          echo "size_h=$size_h" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+          upload() {
+            local url="$1" resp
+            echo "Trying upload: $url"
+            resp=$(curl -fL --retry 2 --retry-delay 10 \
+              --connect-timeout 30 --max-time 7200 \
+              -F "file=@${iso};filename=${name}" \
+              "$url") || return 1
+            echo "$resp" | tee /tmp/gofile-response.json
+            local page
+            page=$(python3 -c 'import json,sys; d=json.load(open("/tmp/gofile-response.json"));
+print(d.get("data",{}).get("downloadPage") or d.get("data",{}).get("downloadPage") or "")')
+            [ -n "$page" ] && [ "$page" != "None" ] || return 1
+            printf '%s\n' "$page"
+          }
+
+          page=""
+          page=$(upload "https://upload.gofile.io/uploadfile") || page=""
+          if [ -z "$page" ]; then
+            servers=$(curl -fsSL --retry 3 https://api.gofile.io/servers || true)
+            echo "servers: $servers"
+            names=$(python3 -c 'import json,sys,os
+raw=os.environ.get("S") or open("/dev/stdin").read()
+try:
+    d=json.loads(raw)
+    arr=d.get("data",{}).get("servers") or []
+    for s in arr:
+        print(s.get("name",""))
+except Exception:
+    pass' <<<"$servers")
+            for s in $names; do
+              [ -n "$s" ] || continue
+              page=$(upload "https://${s}.gofile.io/uploadFile") || page=""
+              [ -n "$page" ] && break
+              page=$(upload "https://${s}.gofile.io/contents/uploadfile") || page=""
+              [ -n "$page" ] && break
+            done
+          fi
+          [ -n "$page" ] || { echo "Gofile upload failed"; exit 1; }
+
+          echo "========================================"
+          echo "GOFILE_DOWNLOAD_PAGE=$page"
+          echo "ISO_NAME=$name"
+          echo "ISO_SIZE_BYTES=$size"
+          echo "ISO_SIZE=$size_h"
+          echo "ISO_SHA256=$sha"
+          echo "========================================"
+          echo "GOFILE_DOWNLOAD_PAGE=$page" >> "$GITHUB_STEP_SUMMARY"
+          echo "page=$page" >> "$GITHUB_OUTPUT"
+          printf 'GOFILE_DOWNLOAD_PAGE=%s\nISO_NAME=%s\nISO_SIZE_BYTES=%s\nISO_SIZE=%s\nISO_SHA256=%s\n' \
+            "$page" "$name" "$size" "$size_h" "$sha" > "$GITHUB_WORKSPACE/out/gofile.txt"
+          cat "$GITHUB_WORKSPACE/out/gofile.txt"
+
+      - name: Upload Gofile link as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gofile-link
+          path: out/gofile.txt
+          if-no-files-found: error
+
+      - name: Attach split ISO to a GitHub Release (backup, each part < 2 GB)
+        if: steps.gofile.outputs.page != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISO_NAME: ${{ steps.gofile.outputs.name }}
+          ISO_SHA256: ${{ steps.gofile.outputs.sha256 }}
+          ISO_SIZE: ${{ steps.gofile.outputs.size_h }}
+          GOFILE: ${{ steps.gofile.outputs.page }}
+        run: |
+          set -euo pipefail
+          iso="$GITHUB_WORKSPACE/out/$ISO_NAME"
+          cd "$GITHUB_WORKSPACE/out"
+          # 1900 MiB parts stay under GitHub's 2 GB release-asset cap.
+          split -b 1900M -d --additional-suffix=.part "$iso" "${ISO_NAME}."
+          ls -lh "${ISO_NAME}".*.part "$iso.sha256" gofile.txt
+          tag="iso-2026.11.23-monday-${{ github.run_number }}"
+          notes="Nuvio Aero OS ISO (aero-deck-2026.11.23-monday).
+
+          **Main download (one file, burn this):** ${GOFILE}
+
+          - File: ${ISO_NAME}
+          - Size: ${ISO_SIZE}
+          - SHA-256: ${ISO_SHA256}
+
+          Burn it with Rufus (DD mode) or balenaEtcher.
+
+          The attached .part files are a backup only. To rejoin: cat ${ISO_NAME}.*.part > ${ISO_NAME} then check the sha256."
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --title "Nuvio Aero OS ISO ${{ github.run_number }}" \
+            --notes "$notes" \
+            "$iso.sha256" gofile.txt ${ISO_NAME}.*.part

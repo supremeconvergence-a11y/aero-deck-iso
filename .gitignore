@@ -1,0 +1,8 @@
+/out/
+*.iso
+*.iso.sha256
+work.img
+secureboot/
+.secrets/
+*.key
+*.img
