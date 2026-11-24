@@ -41,7 +41,7 @@ say "Install official Arch build tools (keep this archiso; do not take a CachyOS
 "${PACMAN[@]}" -S --needed --noconfirm \
     archiso squashfs-tools curl sbsigntools libarchive mtools openssl \
     gnupg flatpak e2fsprogs util-linux python ca-certificates-utils gawk \
-    coreutils tar gzip findutils
+    coreutils tar gzip findutils diffutils
 
 # Hold archiso so a later pacman -Sy in build-aero-deck.sh cannot replace it
 # with a CachyOS build the mkarchiso patch was not written for.
@@ -128,6 +128,20 @@ say "Extract official build-aero-deck.sh from the tarball"
 tar -xOf "$TARBALL" build-aero-deck.sh > /tmp/build-aero-deck.sh
 chmod +x /tmp/build-aero-deck.sh
 [ -s /tmp/build-aero-deck.sh ] || die "build-aero-deck.sh missing from tarball"
+
+# Current mkarchiso passes target_arch=x64 and writes BOOTx64.EFI.
+# The official hook only accepts X64 / BOOTX64.EFI, so shim was skipped.
+say "Patch aero_sb_shim for mkarchiso x64 / BOOTx64.EFI"
+FIXDIR=/tmp/aero-src
+rm -rf "$FIXDIR"
+mkdir -p "$FIXDIR"
+tar xzf "$TARBALL" -C "$FIXDIR"
+HOOK="$FIXDIR/aero-sb-hook.sh"
+[ -f "$HOOK" ] || die "aero-sb-hook.sh missing from tarball"
+python3 /src/ci/patch-sb-hook.py "$HOOK"
+FIXED="/tmp/Nuvio-Aero-OS-ci.tar.gz"
+tar czf "$FIXED" -C "$FIXDIR" .
+TARBALL="$FIXED"
 
 say "Disk before ISO build (WORK_SIZE=$WORK_SIZE AERO_DIR=$AERO_DIR)"
 df -h
