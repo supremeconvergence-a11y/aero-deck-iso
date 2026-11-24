@@ -49,8 +49,11 @@ new = r'''aero_sb_shim() {
     install -m 0644 -- "$bootefi" "$d/grubx64.efi"
     aero_sb_sign "$d/grubx64.efi"
     install -m 0644 -- "${AERO_SB_DIR}/shimx64.efi" "$bootefi"
+    # FAT is case-insensitive: do not keep both BOOTx64.EFI and BOOTX64.EFI
+    # or mcopy into the ESP image fails. Rename to the name the later
+    # official ISO check extracts.
     if [[ "$bootefi" != "$d/BOOTX64.EFI" ]]; then
-        install -m 0644 -- "${AERO_SB_DIR}/shimx64.efi" "$d/BOOTX64.EFI"
+        mv -f "$bootefi" "$d/BOOTX64.EFI"
     fi
     install -m 0644 -- "${AERO_SB_DIR}/mmx64.efi" "$d/mmx64.efi"
     install -m 0644 -- "${AERO_SB_DIR}/aero-mok.cer" "${isofs_dir}/EFI/aero-mok.cer"
