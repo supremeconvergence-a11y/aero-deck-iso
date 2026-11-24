@@ -55,15 +55,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out"
-          # Leave headroom for the ~3.6 GB ISO (written next to work.img),
-          # Docker overlay, and the OS. Cap at 30G (script default).
+          # work.img must hold pacman cache + uncompressed airootfs +
+          # mksquashfs output. 30G filled at ~70% of squashfs on the first run.
+          # Leave 20G on the host for the ~3.6 GB ISO, Docker, and the OS.
           avail_g=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
-          headroom=10
-          if [ "$avail_g" -gt $((30 + headroom)) ]; then
-            work_size=30G
+          headroom=20
+          if [ "$avail_g" -gt $((60 + headroom)) ]; then
+            work_size=60G
           else
             ws=$((avail_g - headroom))
-            [ "$ws" -lt 22 ] && ws=22
+            [ "$ws" -lt 40 ] && ws=40
             work_size="${ws}G"
           fi
           echo "Available on /mnt: ${avail_g}G -> WORK_SIZE=$work_size"

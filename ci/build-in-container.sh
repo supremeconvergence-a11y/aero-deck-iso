@@ -8,7 +8,7 @@ say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 export AERO_DIR="${AERO_DIR:-/aero}"
-export WORK_SIZE="${WORK_SIZE:-26G}"
+export WORK_SIZE="${WORK_SIZE:-60G}"
 export AERO_ISO_VERSION="${AERO_ISO_VERSION:-2026.11.23-monday}"
 # Secure Boot signing happens on the runner; the private key is deleted later.
 export AERO_SECUREBOOT="${AERO_SECUREBOOT:-1}"
